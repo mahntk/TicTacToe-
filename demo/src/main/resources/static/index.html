@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8" />
+    <title>Tic Tac Toe</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin-top: 50px;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+        .panel {
+            display: grid;
+            grid-template-columns: repeat(3, 100px);
+            grid-template-rows: repeat(3, 100px);
+            gap: 5px;
+        }
+        .cell {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 36px;
+            border: 2px solid #333;
+            width: 100px;
+            height: 100px;
+            cursor: pointer;
+        }
+        .cell.taken {
+            cursor: not-allowed;
+            background-color: #f0f0f0;
+        }
+        .text-field {
+            width: 300px;
+            height: 40px;
+            font-size: 16px;
+            padding: 5px 10px;
+            border: 1px solid #999;
+            border-radius: 8px;
+        }
+        .button {
+            width: 200px;
+            height: 50px;
+            font-size: 18px;
+            border: 2px solid #333;
+            border-radius: 10px;
+            background-color: #4CAF50;
+            color: white;
+            cursor: pointer;
+        }
+        .x {
+            color: blue;
+        }
+        .o {
+            color: red;
+        }
+
+        /* ------------ HIER KOMMT DAS OVERLAY-CSS HIN ------------ */
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);  /* Dunkler Hintergrund */
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            font-size: 3rem;
+            opacity: 0;  /* Startet unsichtbar */
+            pointer-events: none;
+            transition: opacity 0.5s;
+        }
+        .overlay.sichtbar {
+            opacity: 1;
+            pointer-events: all;
+        }
+    </style>
+</head>
+<body>
+<h1>Tic Tac Toe</h1>
+
+<div class="container">
+    <!-- Spielername-Eingabe -->
+    <label for="playerName">Spielername:</label>
+    <input type="text" id="playerName" class="text-field" placeholder="Dein Name" />
+
+    <!-- Game-ID-Eingabe (optional zum Beitreten) -->
+    <label for="gameId">Game ID:</label>
+    <input type="text" id="gameId" class="text-field" placeholder="z.B. 12345" />
+
+    <!-- Buttons -->
+    <button class="button" id="startGame">Neues Spiel starten</button>
+    <button class="button" id="joinGame">Spiel beitreten</button>
+
+    <!-- Spielfeld -->
+    <div class="panel" id="gameBoard"></div>
+
+    <!-- Status-/Nachrichten-Bereich -->
+    <div id="message">Status: Bitte Spiel starten oder beitreten.</div>
+</div>
+
+<!-- ---------- NEUES OVERLAY EINFÜGEN ---------- -->
+<div class="overlay" id="overlay">
+    <p id="overlay-text"></p>
+    <button class="button" id="restart">Nochmal spielen!</button>
+</div>
+<!-- -------------------------------------------- -->
+
+<script>
+    const boardElement = document.getElementById('gameBoard');
+    const messageElement = document.getElementById('message');
+
+    // Overlay-Elemente:
+    const overlay = document.getElementById('overlay');
+    const overlayText = document.getElementById('overlay-text');
+    const restartButton = document.getElementById('restart');
+
+    let gameId = null;            // Aktuelle Spiel-ID
+    let currentPlayerName = "";   // Spielername (lokal)
+    let lastBoardState = null;    // Letzter bekannter Spielfeld-Zustand (für Vergleich)
+    let intervalId = null;        // Für das Polling
+
+    // 1) Grundlegendes Spielfeld im DOM initialisieren
+    function initializeBoard() {
+        boardElement.innerHTML = ''; // Altes Board leeren
+        for (let row = 0; row < 3; row++) {
+            for (let col = 0; col < 3; col++) {
+                const cell = document.createElement('div');
+                cell.classList.add('cell');
+                cell.dataset.row = row;
+                cell.dataset.col = col;
+                cell.addEventListener('click', handleMove);
+                boardElement.appendChild(cell);
+            }
+        }
+        messageElement.textContent = "Spielfeld ist bereit.";
+        lastBoardState = null;
+
+        // Overlay ausblenden, wenn neu gestartet
+        overlay.classList.remove('sichtbar');
+    }
+
+    // 2) Neues Spiel starten (Button-Click)
+    document.getElementById('startGame').addEventListener('click', async () => {
+        const playerName = document.getElementById('playerName').value.trim();
+        if (!playerName) {
+            alert("Bitte Spielernamen eingeben!");
+            return;
+        }
+        try {
+            // POST /api/game/start  (erwartet JSON-Body)
+            const response = await fetch('/api/game/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ player1Name: playerName })
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(errorText);
+            }
+
+            const data = await response.json();
+            gameId = data.gameId;
+            currentPlayerName = playerName;
+
+            alert(`🎉Neues Spiel wurde erstellt!🎉\n🗝️Dein Schlüssel lautet🗝️: ${gameId}\n✌️Viel Spaß, Spieler✌️: ${playerName}`);
+
+            initializeBoard();
+            startPolling();
+        } catch (error) {
+            alert("Fehler beim Starten des Spiels: " + error.message);
+        }
+    });
+
+    // 3) Spiel beitreten (Button-Click)
+    document.getElementById('joinGame').addEventListener('click', async () => {
+        const playerName = document.getElementById('playerName').value.trim();
+        const joinId = document.getElementById('gameId').value.trim();
+
+        if (!playerName || !joinId) {
+            alert("Bitte Spielernamen und eine Game-ID eingeben!");
+            return;
+        }
+        try {
+            // POST /api/game/join (JSON-Body)
+            const response = await fetch('/api/game/join', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    gameId: joinId,
+                    playerName: playerName
+                })
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(errorText);
+            }
+
+            const msg = await response.text();
+            alert(msg);
+
+            gameId = joinId;
+            currentPlayerName = playerName;
+
+            initializeBoard();
+            startPolling();
+        } catch (error) {
+            alert("Fehler beim Beitreten: " + error.message);
+        }
+    });
+
+    // 4) Klick auf eine Zelle => Spielzug durchführen
+    async function handleMove(event) {
+        if (!gameId || !currentPlayerName) {
+            alert("Kein aktives Spiel. Bitte Spiel starten oder beitreten.");
+            return;
+        }
+        const row = parseInt(event.target.dataset.row);
+        const col = parseInt(event.target.dataset.col);
+
+        try {
+            // POST /api/game/move
+            const response = await fetch('/api/game/move', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    gameId: gameId,
+                    playerName: currentPlayerName,
+                    row: row,
+                    col: col
+                })
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(errorText);
+            }
+
+            const gameData = await response.json();
+            updateBoard(gameData);
+        } catch (error) {
+            alert("Fehler beim Spielzug: " + error.message);
+        }
+    }
+
+    // 5) Board aktualisieren
+    function updateBoard(gameData) {
+        const { board, gameEnded, winner, currentPlayer } = gameData;
+
+        // Doppel-Update vermeiden
+        const currentBoardString = JSON.stringify(board);
+        if (lastBoardState === currentBoardString) {
+            return; // Keine Änderung
+        }
+        lastBoardState = currentBoardString;
+
+        // Zellen befüllen (0=leer, 1=X, 2=O)
+        const cells = document.querySelectorAll('.cell');
+        cells.forEach(cell => {
+            const r = parseInt(cell.dataset.row);
+            const c = parseInt(cell.dataset.col);
+            const val = board[r][c];
+            if (val === 1) {
+                cell.textContent = '👾';
+                cell.classList.add('x', 'taken');
+            } else if (val === 2) {
+                cell.textContent = '🤖';
+                cell.classList.add('o', 'taken');
+            } else {
+                cell.textContent = '';
+                cell.classList.remove('x', 'o', 'taken');
+            }
+        });
+
+        // Status
+        if (gameEnded) {
+            // Falls "Unentschieden" laut Backend
+            if (winner === "Unentschieden") {
+                spielBeenden(true);
+            } else {
+                spielBeenden(false, winner);
+            }
+
+            // Falls du das Polling beenden möchtest, damit keine weiteren
+            // Requests mehr gesendet werden:
+            if (intervalId) {
+                clearInterval(intervalId);
+                intervalId = null;
+            }
+        } else {
+            // Nächster Spieler
+            const nextPlayerName = (currentPlayer === 1)
+                ? gameData.player1Name
+                : gameData.player2Name;
+            messageElement.textContent = `Nächster Spieler: ${nextPlayerName}`;
+        }
+    }
+
+    // 5a) Overlay anzeigen, wenn Spiel zu Ende
+    function spielBeenden(unentschieden, winnerName) {
+        if (unentschieden) {
+            overlayText.textContent = 'Unentschieden!😒';
+        } else {
+            // Wenn `winnerName` vom Server kommt, kannst du ihn direkt anzeigen:
+            // oder nutze deinen eigenen Text wie 'Du hast gewonnen!' etc.
+            overlayText.textContent = `🍾🍾${winnerName} hat gewonnen!🍾🍾`;
+        }
+        overlay.classList.add('sichtbar');  // Overlay wird sichtbar
+    }
+
+    // 6) Spielstand periodisch abfragen
+    function startPolling() {
+        // Falls schon ein Interval läuft, stoppe es zunächst
+        if (intervalId) {
+            clearInterval(intervalId);
+        }
+        intervalId = setInterval(fetchGameState, 1000);
+    }
+
+    async function fetchGameState() {
+        if (!gameId) return;
+        try {
+            const response = await fetch(`/api/game/state/${gameId}`);
+            if (!response.ok) return;  // z.B. Spiel existiert nicht mehr
+            const gameData = await response.json();
+            updateBoard(gameData);
+        } catch (error) {
+            console.error("Fehler beim State-Polling:", error);
+        }
+    }
+
+    // 7) Restart-Button im Overlay
+    restartButton.addEventListener('click', () => {
+        // Dein Spiel neu initialisieren
+        initializeBoard();
+
+        // Wenn du auch direkt ein „neues Spiel“ auf dem Server starten möchtest,
+        // dann musst du noch einmal /api/game/start aufrufen oder die relevanten
+        // Variablen zurücksetzen. Das hängt von deiner Logik ab.
+        // Hier machen wir nur das lokale Board neu:
+    });
+
+    // Beim Laden der Seite ein leeres Board anzeigen
+    initializeBoard();
+</script>
+</body>
+</html>
